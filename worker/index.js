@@ -8,31 +8,83 @@ async function sha256Hex(str) {
 }
 
 async function checkAuth(request, env) {
+  // 从环境变量获取用户名和密码哈希
+  const expectedUsername = env.AUTH_USERNAME;  // 预期用户名
   const storedHash = env.AUTH_PASSWORD_HASH;   // 密码的sha256 hex值
 
   const auth = request.headers.get("Authorization");
   if (!auth || !auth.startsWith("Basic ")) {
     return new Response("Authentication required", {
       status: 401,
-      headers: { "WWW-Authenticate": 'Basic realm="Protected"' }
+      headers: { 
+        "WWW-Authenticate": 'Basic realm="Protected", charset="UTF-8"',
+        "Content-Type": "text/plain; charset=utf-8"
+      }
     });
   }
 
-  const decoded = atob(auth.slice(6)); // 去掉 "Basic "
-  const password = decoded.split(":")[1] || ""; // 用户输入的密码
-  const passwordHash = await sha256Hex(password);
-
-  if (passwordHash !== storedHash) {
-    return new Response("Unauthorized", { status: 401 });
+  try {
+    // 解码 Base64 凭证
+    const decoded = atob(auth.slice(6)); // 去掉 "Basic "
+    const parts = decoded.split(":");
+    
+    if (parts.length < 2) {
+      return new Response("Invalid authentication format", { 
+        status: 401,
+        headers: { 
+          "WWW-Authenticate": 'Basic realm="Protected", charset="UTF-8"',
+          "Content-Type": "text/plain; charset=utf-8"
+        }
+      });
+    }
+    
+    const username = parts[0] || "";
+    const password = parts.slice(1).join(":"); // 处理密码中可能包含冒号的情况
+    
+    // 验证用户名
+    if (username !== expectedUsername) {
+      console.log(`Authentication failed: username mismatch. Expected: ${expectedUsername}, Got: ${username}`);
+      return new Response("Unauthorized: Invalid username", { 
+        status: 401,
+        headers: { 
+          "WWW-Authenticate": 'Basic realm="Protected", charset="UTF-8"',
+          "Content-Type": "text/plain; charset=utf-8"
+        }
+      });
+    }
+    
+    // 计算密码哈希并验证
+    const passwordHash = await sha256Hex(password);
+    
+    if (passwordHash !== storedHash) {
+      console.log(`Authentication failed: password hash mismatch for user ${username}`);
+      return new Response("Unauthorized: Invalid password", { 
+        status: 401,
+        headers: { 
+          "WWW-Authenticate": 'Basic realm="Protected", charset="UTF-8"',
+          "Content-Type": "text/plain; charset=utf-8"
+        }
+      });
+    }
+    
+    console.log(`Authentication successful for user: ${username}`);
+    return null; // 通过验证
+    
+  } catch (error) {
+    console.error("Authentication error:", error);
+    return new Response("Authentication error", { 
+      status: 401,
+      headers: { 
+        "WWW-Authenticate": 'Basic realm="Protected", charset="UTF-8"',
+        "Content-Type": "text/plain; charset=utf-8"
+      }
+    });
   }
-
-  return null; // 通过验证
 }
 
 export default {
   async fetch(request, env, ctx) {
-
-     // === 插入密码保护：所有路径都必须验证 ===
+    // === 插入用户名和密码保护：所有路径都必须验证 ===
     const authFail = await checkAuth(request, env);
     if (authFail) return authFail;
     // ==========================================
@@ -58,7 +110,9 @@ export default {
   }
 };
 
-export class ChatRoom {  constructor(state, env) {
+// ChatRoom 类保持不变...
+export class ChatRoom {
+  constructor(state, env) {
     this.state = state;
     
     // Use objects like original server.js instead of Maps
