@@ -1,5 +1,94 @@
 import { generateClientId, encryptMessage, decryptMessage, logEvent, isString, isObject, getTime } from './utils.js';
 
+// 登录页面 HTML
+function getLoginPage(errorMsg = "") {
+  return `
+  <!DOCTYPE html>
+  <html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>系统访问保护</title>
+    <style>
+      :root { --primary: #2563eb; --bg: #f8fafc; --card: #ffffff; --text: #1e293b; }
+      body {
+        margin: 0; padding: 0;
+        display: flex; justify-content: center; align-items: center;
+        min-height: 100vh; background-color: var(--bg);
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      }
+      .login-card {
+        background: var(--card);
+        padding: 2.5rem;
+        border-radius: 16px;
+        box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
+        width: 100%; max-width: 360px;
+        text-align: center;
+      }
+      h2 { margin-bottom: 1.5rem; color: var(--text); font-weight: 700; }
+      .input-group { margin-bottom: 1rem; text-align: left; }
+      label { display: block; font-size: 0.875rem; font-weight: 500; color: #64748b; margin-bottom: 0.5rem; }
+      input {
+        width: 100%; padding: 0.75rem; border: 1px solid #e2e8f0; border-radius: 8px;
+        font-size: 1rem; outline: none; transition: all 0.2s; box-sizing: border-box;
+      }
+      input:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1); }
+      button {
+        width: 100%; padding: 0.875rem;
+        background-color: var(--primary); color: white;
+        border: none; border-radius: 8px; font-weight: 600; font-size: 1rem;
+        cursor: pointer; transition: background 0.2s; margin-top: 1rem;
+      }
+      button:hover { background-color: #1d4ed8; }
+      .error { color: #ef4444; font-size: 0.875rem; margin-bottom: 1rem; min-height: 1.25em; }
+    </style>
+  </head>
+  <body>
+    <div class="login-card">
+      <h2>🔒 访问验证</h2>
+      <div id="error-msg" class="error">${errorMsg}</div>
+      <form id="loginForm">
+        <div class="input-group">
+          <label>用户名</label>
+          <input type="text" id="username" required autocomplete="username">
+        </div>
+        <div class="input-group">
+          <label>密码</label>
+          <input type="password" id="password" required autocomplete="current-password">
+        </div>
+        <button type="submit">进入系统</button>
+      </form>
+    </div>
+    <script>
+      document.getElementById('loginForm').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const u = document.getElementById('username').value;
+        const p = document.getElementById('password').value;
+        const btn = e.target.querySelector('button');
+        
+        // 简单的输入检查
+        if(!u || !p) return;
+
+        btn.disabled = true;
+        btn.innerText = "验证中...";
+
+        // 构造 Basic Auth 字符串
+        const credentials = btoa(u + ":" + p);
+        
+        // 设置 Cookie，有效期 7 天
+        const d = new Date();
+        d.setTime(d.getTime() + (7*24*60*60*1000));
+        document.cookie = "auth_token=" + credentials + ";expires="+ d.toUTCString() + ";path=/;SameSite=Strict";
+
+        // 刷新页面，让服务器读取 Cookie
+        location.reload();
+      });
+    </script>
+  </body>
+  </html>
+  `;
+}
+
 async function sha256Hex(str) {
   const encoder = new TextEncoder();
   const data = encoder.encode(str);
@@ -7,64 +96,78 @@ async function sha256Hex(str) {
   return [...new Uint8Array(hash)].map(b => b.toString(16).padStart(2, "0")).join("");
 }
 
+// 验证函数
 async function checkAuth(request, env) {
-  // 从环境变量获取用户名和密码哈希
-  const expectedUsername = env.AUTH_USERNAME;  // 预期用户名
-  const storedHash = env.AUTH_PASSWORD_HASH;   // 密码的sha256 hex值
+  const expectedUsername = env.AUTH_USERNAME;
+  const storedHash = env.AUTH_PASSWORD_HASH;
 
-  const auth = request.headers.get("Authorization");
-  if (!auth || !auth.startsWith("Basic ")) {
-    return new Response("Authentication required", {
-      status: 401,
-      headers: { 
-        "WWW-Authenticate": 'Basic realm="Protected", charset="UTF-8"',
-        "Content-Type": "text/plain; charset=utf-8"
+  // 尝试获取 Header 中的认证信息
+  let auth = request.headers.get("Authorization");
+  let isFromCookie = false;
+
+  // 如果 Header 没有，尝试从 Cookie 获取
+  if (!auth) {
+    const cookieHeader = request.headers.get("Cookie");
+    if (cookieHeader) {
+      const cookies = cookieHeader.split(';').reduce((acc, cookie) => {
+        const [name, value] = cookie.trim().split('=');
+        acc[name] = value;
+        return acc;
+      }, {});
+      
+      if (cookies['auth_token']) {
+        auth = "Basic " + cookies['auth_token'];
+        isFromCookie = true;
       }
+    }
+  }
+
+  // 如果完全没有凭证，返回 HTML 登录页
+  if (!auth || !auth.startsWith("Basic ")) {
+    return new Response(getLoginPage(), {
+      headers: { "Content-Type": "text/html; charset=utf-8" }
     });
   }
 
   try {
-    // 解码 Base64 凭证
-    const decoded = atob(auth.slice(6)); // 去掉 "Basic "
+    const decoded = atob(auth.slice(6)); 
     const parts = decoded.split(":");
     
     if (parts.length < 2) {
-      return new Response("Invalid authentication format", { 
-        status: 401,
-        headers: { 
-          "WWW-Authenticate": 'Basic realm="Protected", charset="UTF-8"',
-          "Content-Type": "text/plain; charset=utf-8"
-        }
+      return new Response(getLoginPage("无效的凭证格式"), { 
+        headers: { "Content-Type": "text/html; charset=utf-8" }
       });
     }
     
     const username = parts[0] || "";
-    const password = parts.slice(1).join(":"); // 处理密码中可能包含冒号的情况
+    const password = parts.slice(1).join(":"); 
     
-    // 验证用户名
+    // 验证逻辑
+    let isValid = true;
+    let errorMsg = "";
+
     if (username !== expectedUsername) {
-      console.log(`Authentication failed: username mismatch. Expected: ${expectedUsername}, Got: ${username}`);
-      return new Response("Unauthorized: Invalid username", { 
-        status: 401,
-        headers: { 
-          "WWW-Authenticate": 'Basic realm="Protected", charset="UTF-8"',
-          "Content-Type": "text/plain; charset=utf-8"
-        }
-      });
+      isValid = false;
+      errorMsg = "用户名错误";
+      console.log(`Auth failed: user mismatch (${username})`);
+    } else {
+      const passwordHash = await sha256Hex(password);
+      if (passwordHash !== storedHash) {
+        isValid = false;
+        errorMsg = "密码错误";
+        console.log(`Auth failed: hash mismatch`);
+      }
     }
     
-    // 计算密码哈希并验证
-    const passwordHash = await sha256Hex(password);
-    
-    if (passwordHash !== storedHash) {
-      console.log(`Authentication failed: password hash mismatch for user ${username}`);
-      return new Response("Unauthorized: Invalid password", { 
-        status: 401,
-        headers: { 
-          "WWW-Authenticate": 'Basic realm="Protected", charset="UTF-8"',
-          "Content-Type": "text/plain; charset=utf-8"
-        }
-      });
+    // 验证失败处理
+    if (!isValid) {
+        return new Response(getLoginPage(errorMsg), {
+            status: 401,
+            headers: { 
+                "Content-Type": "text/html; charset=utf-8",
+                "Set-Cookie": "auth_token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;"
+            }
+        });
     }
     
     console.log(`Authentication successful for user: ${username}`);
@@ -72,12 +175,9 @@ async function checkAuth(request, env) {
     
   } catch (error) {
     console.error("Authentication error:", error);
-    return new Response("Authentication error", { 
-      status: 401,
-      headers: { 
-        "WWW-Authenticate": 'Basic realm="Protected", charset="UTF-8"',
-        "Content-Type": "text/plain; charset=utf-8"
-      }
+    return new Response(getLoginPage("服务器内部验证错误"), { 
+        status: 500,
+        headers: { "Content-Type": "text/html; charset=utf-8" }
     });
   }
 }
