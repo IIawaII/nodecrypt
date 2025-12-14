@@ -176,8 +176,7 @@ function setupSettingsPanel() {
 			askNotificationPermission(permission => {
 				if (permission === 'granted') {
 					settings.notify = true;
-					settings.sound = false;
-					if (soundCheckbox) soundCheckbox.checked = false;
+					settings.sound = true;
 					saveSettings(settings);
 					applySettings(settings);					// 防止重复通知，添加一个标志位
 					if (!settingsSidebar._notificationShown) {
@@ -204,10 +203,6 @@ function setupSettingsPanel() {
 		}
 	});	on(soundCheckbox, 'change', e => {
 		settings.sound = e.target.checked;
-		if (settings.sound) {
-			settings.notify = false;
-			if (notifyCheckbox) notifyCheckbox.checked = false;
-		}
 		saveSettings(settings);
 		applySettings(settings)
 	});

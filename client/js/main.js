@@ -22,6 +22,12 @@ import {
 	setupEmojiPicker
 } from './util.emoji.js';
 
+// 从 util.notification.js 中导入提示的功能函数
+import { 
+	handleNewMessage, 
+	initNotificationSystem 
+} from './util.notification.js';
+
 // 从 util.settings.js 中导入设置面板的功能函数
 // Import functions for settings panel from util.settings.js
 import {
@@ -98,7 +104,7 @@ updateStaticTexts();
 window.addSystemMsg = addSystemMsg;
 window.addOtherMsg = addOtherMsg;
 window.joinRoom = joinRoom;
-window.notifyMessage = notifyMessage;
+window.notifyMessage = handleNewMessage;
 window.setupEmojiPicker = setupEmojiPicker;
 window.handleFileMessage = handleFileMessage;
 window.downloadFile = downloadFile;
@@ -106,6 +112,8 @@ window.downloadFile = downloadFile;
 // 当 DOM 内容加载完成后执行初始化逻辑
 // Run initialization logic when the DOM content is fully loaded
 window.addEventListener('DOMContentLoaded', () => {
+	// 初始化通知权限
+	initNotificationSystem();
 	// 移除预加载样式类，允许过渡效果
 	// Remove preload class to allow transitions
 	setTimeout(() => {
