@@ -1,7 +1,42 @@
 import { generateClientId, encryptMessage, decryptMessage, logEvent, isString, isObject, getTime } from './utils.js';
 
+async function sha256Hex(str) {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(str);
+  const hash = await crypto.subtle.digest("SHA-256", data);
+  return [...new Uint8Array(hash)].map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+async function checkAuth(request, env) {
+  const storedHash = env.AUTH_PASSWORD_HASH;   // 密码的sha256 hex值
+
+  const auth = request.headers.get("Authorization");
+  if (!auth || !auth.startsWith("Basic ")) {
+    return new Response("Authentication required", {
+      status: 401,
+      headers: { "WWW-Authenticate": 'Basic realm="Protected"' }
+    });
+  }
+
+  const decoded = atob(auth.slice(6)); // 去掉 "Basic "
+  const password = decoded.split(":")[1] || ""; // 用户输入的密码
+  const passwordHash = await sha256Hex(password);
+
+  if (passwordHash !== storedHash) {
+    return new Response("Unauthorized", { status: 401 });
+  }
+
+  return null; // 通过验证
+}
+
 export default {
   async fetch(request, env, ctx) {
+
+     // === 插入密码保护：所有路径都必须验证 ===
+    const authFail = await checkAuth(request, env);
+    if (authFail) return authFail;
+    // ==========================================
+    
     const url = new URL(request.url);
 
     // 处理WebSocket请求
