@@ -79,7 +79,7 @@ export async function encryptBlob(blob, key) {
 }
 
 // 6. 解密 Blob
-export async function decryptBlob(encryptedBlob, key) {
+export async function decryptBlob(encryptedBlob, key, mimeType = "application/octet-stream") {
   const buffer = await encryptedBlob.arrayBuffer();
   const arr = new Uint8Array(buffer);
   
@@ -94,7 +94,7 @@ export async function decryptBlob(encryptedBlob, key) {
     data
   );
   
-  return new Blob([decryptedBuffer]);
+  return new Blob([decryptedBuffer], { type: mimeType });
 }
 
 // 7. 上传到 Worker/R2

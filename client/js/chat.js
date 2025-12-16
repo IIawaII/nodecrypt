@@ -15,38 +15,39 @@ import {
 } from "./util.dom.js";
 import { formatFileSize } from "./util.file.js";
 import { t } from "./util.i18n.js";
-// === 新增：导入解密工具 ===
+// === 引入解密工具 ===
 import { importKey, decryptBlob } from "./util.storage.js";
 
 // === 辅助函数：加载并解密 R2 图片 ===
-// 用于将加密的远程图片加载到 img 元素中
-async function loadEncryptedImage(fileId, keyJwk, imgElement) {
+// 增加 mimeType 参数，确保 Blob 类型正确
+async function loadEncryptedImage(fileId, keyJwk, imgElement, mimeType = "image/jpeg") {
   try {
-    // 1. 获取加密的二进制数据
     const res = await fetch(`/api/image/${fileId}`);
     if (!res.ok) throw new Error("Image load failed");
     const encryptedBlob = await res.blob();
 
-    // 2. 导入解密密钥
     const key = await importKey(keyJwk);
 
-    // 3. 解密
-    const decryptedBlob = await decryptBlob(encryptedBlob, key);
+    // 传入 mimeType 给解密函数
+    const decryptedBlob = await decryptBlob(encryptedBlob, key, mimeType);
 
-    // 4. 生成 Blob URL 并显示
     const url = URL.createObjectURL(decryptedBlob);
-    imgElement.src = url;
     
-    // 加载完成后移除 loading 样式（如果需要）
-    imgElement.classList.remove("loading");
+    // 如果是 img 标签，更新 src
+    if (imgElement && imgElement.tagName === "IMG") {
+      imgElement.src = url;
+      imgElement.classList.remove("loading");
+    }
     
-    // 返回 blob 以便后续使用（例如查看大图时复用，虽然通常会重新下载原图）
+    // 返回 blob 供后续使用（如下载）
     return decryptedBlob;
   } catch (error) {
     console.error("Failed to load encrypted image:", error);
-    imgElement.alt = "Image Load Failed";
-    imgElement.src = ""; // 或者显示一个破损图片的图标
-    imgElement.classList.add("load-error");
+    if (imgElement) {
+      imgElement.alt = "Image Load Failed";
+      imgElement.classList.add("load-error");
+    }
+    throw error;
   }
 }
 
@@ -74,7 +75,7 @@ export function renderChatArea() {
   });
 }
 
-// 添加消息到聊天区域 (自己发送的消息)
+// 添加自己发送的消息
 export function addMsg(
   text,
   isHistory = false,
@@ -105,13 +106,13 @@ export function addMsg(
 
   // === 处理新版 R2 加密图片消息 ===
   if (msgType === "image_r2" || msgType === "image_r2_private") {
-    // text 是一个对象: { originalId, thumbId, key, text, mime, ... }
-    const data = text; 
+    const data = text; // { originalId, thumbId, key, mime, fileName, text... }
     const messageText = data.text ? `<div class="message-text">${textToHTML(data.text)}</div>` : "";
     
     // 生成唯一 ID 用于异步查找元素
     const imgId = `r2-img-${Math.random().toString(36).substr(2, 9)}`;
-    
+    const thumbMime = "image/jpeg"; // 缩略图固定为 jpeg
+
     contentHtml = `
       <div class="r2-image-container">
         ${messageText}
@@ -127,17 +128,16 @@ export function addMsg(
       const imgEl = document.getElementById(imgId);
       if (imgEl) {
         // 1. 加载并解密缩略图
-        loadEncryptedImage(data.thumbId, data.key, imgEl).then(() => {
+        loadEncryptedImage(data.thumbId, data.key, imgEl, thumbMime).then(() => {
              imgEl.style.opacity = "1";
-             // 移除 loader (需要 CSS 支持，或者直接通过 JS 移除 sibling)
              const loader = imgEl.parentNode.querySelector('.img-loader');
              if(loader) loader.remove();
         });
 
-        // 2. 绑定点击事件：查看原图
+        // 2. 绑定点击事件：查看原图 (传入 mime 和 fileName)
         imgEl.style.cursor = "pointer";
         imgEl.onclick = () => {
-          showR2ImageModal(data.originalId, data.key);
+          showR2ImageModal(data.originalId, data.key, data.mime, data.fileName);
         };
       }
     }, 0);
@@ -146,7 +146,6 @@ export function addMsg(
   // === 处理旧版 Base64 图片消息 (保持兼容) ===
   else if (msgType === "image" || msgType === "image_private") {
     if (typeof text === "object" && text.images && Array.isArray(text.images)) {
-      // 多图格式
       const messageText = text.text ? textToHTML(text.text) : "";
       const imageElements = text.images
         .map((imgData) => {
@@ -160,7 +159,6 @@ export function addMsg(
         contentHtml = imageElements || messageText;
       }
     } else if (typeof text === "object" && text.image) {
-      // 单图对象格式
       const safeImgSrc = escapeHTML(text.image).replace(/javascript:/gi, "");
       const messageText = text.text ? textToHTML(text.text) : "";
       if (messageText) {
@@ -169,7 +167,6 @@ export function addMsg(
         contentHtml = `<img src="${safeImgSrc}" alt="image" class="bubble-img">`;
       }
     } else {
-      // 纯 Base64 字符串格式
       const safeImgSrc = escapeHTML(text).replace(/javascript:/gi, "");
       contentHtml = `<img src="${safeImgSrc}" alt="image" class="bubble-img">`;
     }
@@ -234,6 +231,7 @@ export function addOtherMsg(
     const messageText = data.text ? `<div class="message-text">${textToHTML(data.text)}</div>` : "";
     
     const imgId = `r2-img-other-${Math.random().toString(36).substr(2, 9)}`;
+    const thumbMime = "image/jpeg";
     
     contentHtml = `
       <div class="r2-image-container">
@@ -245,21 +243,18 @@ export function addOtherMsg(
       </div>
     `;
 
-    // 异步加载
     setTimeout(() => {
       const imgEl = document.getElementById(imgId);
       if (imgEl) {
-        // 加载缩略图
-        loadEncryptedImage(data.thumbId, data.key, imgEl).then(() => {
+        loadEncryptedImage(data.thumbId, data.key, imgEl, thumbMime).then(() => {
              imgEl.style.opacity = "1";
              const loader = imgEl.parentNode.querySelector('.img-loader');
              if(loader) loader.remove();
         });
         
-        // 点击查看原图
         imgEl.style.cursor = "pointer";
         imgEl.onclick = () => {
-          showR2ImageModal(data.originalId, data.key);
+          showR2ImageModal(data.originalId, data.key, data.mime, data.fileName);
         };
       }
     }, 0);
@@ -353,7 +348,7 @@ export function addSystemMsg(text, isHistory = false, timestamp = null) {
   chatArea.scrollTop = chatArea.scrollHeight;
 }
 
-// 更新输入框样式 (私聊/群聊)
+// 更新输入框样式
 export function updateChatInputStyle() {
   const rd = roomsData[activeRoomIndex];
   const chatInputArea = $(".chat-input-area");
@@ -380,13 +375,12 @@ export function updateChatInputStyle() {
   placeholder.style.opacity = html === "" ? "1" : "0";
 }
 
-// 设置图片预览功能 (用于旧版 Base64 图片)
+// 设置图片预览功能
 export function setupImagePreview() {
   on($id("chat-area"), "click", function (e) {
     const target = e.target;
     if (target.tagName === "IMG" && target.closest(".bubble-content")) {
-      // 只有非 R2 图片才通过这里处理
-      // R2 图片已经绑定了自己的 onclick 事件
+      // 排除 R2 图片（它们有自己的 onclick 处理）
       if (!target.id || !target.id.startsWith('r2-img')) {
           showImageModal(target.src);
       }
@@ -395,8 +389,8 @@ export function setupImagePreview() {
 }
 
 // === 新增：显示 R2 加密原图的模态框 ===
-export function showR2ImageModal(fileId, keyJwk) {
-  // 创建模态框结构
+export function showR2ImageModal(fileId, keyJwk, mimeType = "image/jpeg", fileName = "image.jpg") {
+  // 创建模态框，包含一个明确的下载按钮
   const modal = createElement(
     "div",
     { class: "img-modal-bg" },
@@ -404,6 +398,9 @@ export function showR2ImageModal(fileId, keyJwk) {
      <div class="img-modal-content img-modal-content-overflow">
         <div class="modal-loading-indicator" style="color:white; font-size: 20px;">Loading Original...</div>
         <img class="img-modal-img" style="display:none;" />
+        <div class="modal-tools" style="position: absolute; bottom: 20px; right: 20px; z-index: 100;">
+           <button class="download-btn" style="padding: 8px 16px; background: rgba(0,0,0,0.6); border: 1px solid white; color: white; border-radius: 4px; cursor: pointer; display:none;">Download Original</button>
+        </div>
         <span class="img-modal-close">&times;</span>
      </div>`
   );
@@ -411,10 +408,9 @@ export function showR2ImageModal(fileId, keyJwk) {
   
   const img = $("img", modal);
   const loading = $(".modal-loading-indicator", modal);
+  const downloadBtn = $(".download-btn", modal);
   
-  // 绑定关闭事件
   const cleanup = () => { 
-      // 释放 URL 对象（如果已创建）
       if (img.src && img.src.startsWith('blob:')) {
           URL.revokeObjectURL(img.src);
       }
@@ -422,20 +418,36 @@ export function showR2ImageModal(fileId, keyJwk) {
   };
   on($(".img-modal-close", modal), "click", cleanup);
   on(modal, "click", (e) => {
-    if (e.target === modal) cleanup();
+    if (e.target === modal || e.target.classList.contains("img-modal-blur")) cleanup();
   });
 
-  // 开始下载并解密原图
-  loadEncryptedImage(fileId, keyJwk, img).then(() => {
+  // 1. 加载原图 (传入 mimeType)
+  loadEncryptedImage(fileId, keyJwk, img, mimeType).then((decryptedBlob) => {
      if (loading) loading.style.display = 'none';
      img.style.display = 'block';
+     
+     // 2. 启用下载按钮
+     if (downloadBtn) {
+         downloadBtn.style.display = "block";
+         downloadBtn.onclick = (e) => {
+             e.stopPropagation(); // 防止触发模态框关闭
+             const downloadUrl = URL.createObjectURL(decryptedBlob);
+             const a = document.createElement("a");
+             a.href = downloadUrl;
+             // 强制指定文件名和后缀
+             a.download = fileName || `image_${Date.now()}.${mimeType.split('/')[1]}`;
+             document.body.appendChild(a);
+             a.click();
+             document.body.removeChild(a);
+             URL.revokeObjectURL(downloadUrl);
+         };
+     }
   });
 
-  // 添加缩放逻辑 (复用 showImageModal 的逻辑)
   setupImageZoom(img, modal);
 }
 
-// 显示图片模态框 (旧版，用于 Base64 图片)
+// 显示图片模态框 (旧版)
 export function showImageModal(src) {
   const modal = createElement(
     "div",
@@ -453,28 +465,34 @@ export function showImageModal(src) {
   setupImageZoom(img, modal);
 }
 
-// 抽离出的图片缩放逻辑
+// 抽离的图片缩放逻辑
 function setupImageZoom(img, modal) {
   let scale = 1;
   let isDragging = false;
-  let lastX = 0, lastY = 0;
-  let offsetX = 0, offsetY = 0;
-  
-  img.ondragstart = function (e) { e.preventDefault(); };
-  
+  let lastX = 0,
+    lastY = 0;
+  let offsetX = 0,
+    offsetY = 0;
+  img.ondragstart = function (e) {
+    e.preventDefault();
+  };
   on(img, "wheel", function (ev) {
     ev.preventDefault();
+    const prevScale = scale;
     scale += ev.deltaY < 0 ? 0.1 : -0.1;
     scale = Math.max(0.2, Math.min(5, scale));
-    if (scale === 1) { offsetX = 0; offsetY = 0; }
+    if (scale === 1) {
+      offsetX = 0;
+      offsetY = 0;
+    }
     updateTransform();
   });
 
   function updateTransform() {
     img.style.transform = `translate(${offsetX}px,${offsetY}px)scale(${scale})`;
-    img.style.cursor = scale > 1 ? (isDragging ? "grabbing" : "grab") : "zoom-in";
+    img.style.cursor =
+      scale > 1 ? (isDragging ? "grabbing" : "grab") : "zoom-in";
   }
-  
   on(img, "mousedown", function (ev) {
     if (scale <= 1) return;
     isDragging = true;
@@ -500,19 +518,21 @@ function setupImageZoom(img, modal) {
       document.body.style.userSelect = "";
     }
   }
-  
   on(window, "mousemove", onMouseMove);
   on(window, "mouseup", onMouseUp);
   on(img, "dblclick", function () {
-    scale = 1; offsetX = 0; offsetY = 0; updateTransform();
+    scale = 1;
+    offsetX = 0;
+    offsetY = 0;
+    updateTransform();
   });
-  
   const cleanup = () => {
     off(window, "mousemove", onMouseMove);
     off(window, "mouseup", onMouseUp);
     document.body.style.userSelect = "";
   };
   on(modal, "remove", cleanup);
+  on($(".img-modal-close", modal), "click", cleanup);
   updateTransform();
 }
 
@@ -521,10 +541,13 @@ function renderFileMessage(fileData, isSender) {
   const { fileId, fileName, originalSize, totalVolumes, fileCount, isArchive } =
     fileData;
 
+  // For archive files, show file count and total size
   let displayName, displayMeta;
   if (isArchive && fileCount) {
     displayName = `${fileCount}${t("file.files", " files")}`;
-    displayMeta = `${t("file.total", "Total")}: ${formatFileSize(originalSize)}`;
+    displayMeta = `${t("file.total", "Total")}: ${formatFileSize(
+      originalSize
+    )}`;
   } else {
     displayName = fileName;
     displayMeta = formatFileSize(originalSize);
@@ -532,7 +555,10 @@ function renderFileMessage(fileData, isSender) {
 
   const safeDisplayName = escapeHTML(displayName);
 
-  const transfer = window.fileTransfers ? window.fileTransfers.get(fileId) : null;
+  // Check actual file transfer status
+  const transfer = window.fileTransfers
+    ? window.fileTransfers.get(fileId)
+    : null;
   let statusText = "";
   let progressWidth = "0%";
   let downloadBtnStyle = "display: none;";
@@ -545,18 +571,23 @@ function renderFileMessage(fileData, isSender) {
       statusText = `Sending ${transfer.sentVolumes}/${transfer.totalVolumes}`;
       showProgress = true;
     } else if (transfer.status === "receiving") {
-      const progress = (transfer.receivedVolumes.size / transfer.totalVolumes) * 100;
+      const progress =
+        (transfer.receivedVolumes.size / transfer.totalVolumes) * 100;
       progressWidth = `${progress}%`;
       statusText = `Receiving ${transfer.receivedVolumes.size}/${transfer.totalVolumes}`;
       showProgress = true;
     } else if (transfer.status === "completed") {
+      // 完成时不显示任何状态，只显示下载按钮
       downloadBtnStyle = isSender ? "display: none;" : "display: flex;";
     }
   } else if (isSender) {
+    // 发送方历史消息，不显示状态和下载按钮
     downloadBtnStyle = "display: none;";
   } else {
+    // 接收方历史消息，直接显示下载按钮（带动画效果）
     downloadBtnStyle = "display: flex;";
   }
+  // Different icon for archives vs single files
   const fileIcon = isArchive ? "📦" : "📄";
 
   return `
@@ -570,7 +601,7 @@ function renderFileMessage(fileData, isSender) {
 					</div>
 				</div>
 				<button class="file-download-btn show" style="${downloadBtnStyle}" onclick="window.downloadFile('${fileId}')">
-					<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><g><path fill-rule="evenodd" clip-rule="evenodd" d="M8 10C8 7.79086 9.79086 6 12 6C14.2091 6 16 7.79086 16 10V11H17C18.933 11 20.5 12.567 20.5 14.5C20.5 16.433 18.933 18 17 18H16.9C16.3477 18 15.9 18.4477 15.9 19C15.9 19.5523 16.3477 20 16.9 20H17C20.0376 20 22.5 17.5376 22.5 14.5C22.5 11.7793 20.5245 9.51997 17.9296 9.07824C17.4862 6.20213 15.0003 4 12 4C8.99974 4 6.51381 6.20213 6.07036 9.07824C3.47551 9.51997 1.5 11.7793 1.5 14.5C1.5 17.5376 3.96243 20 7 20H7.1C7.65228 20 8.1 19.5523 8.1 19C8.1 18.4477 7.65228 18 7.1 18H7C5.067 18 3.5 16.433 3.5 14.5C3.5 12.567 5.067 11 7 11H8V10ZM13 11C13 10.4477 12.5523 10 12 10C11.4477 10 11 10.4477 11 11V16.5858L9.70711 15.2929C9.31658 14.9024 8.68342 14.9024 8.29289 15.2929C7.90237 15.6834 7.90237 16.3166 8.29289 16.7071L11.2929 19.7071C11.6834 20.0976 12.3166 20.0976 12.7071 19.7071L15.7071 16.7071C16.0976 16.3166 16.0976 15.6834 15.7071 15.2929C15.3166 14.9024 14.6834 14.9024 14.2929 15.2929L13 16.5858V11Z" fill="currentColor"></path></g></svg>
+					<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><g stroke-width="0"></g><g stroke-linecap="round" stroke-linejoin="round"></g><g> <path fill-rule="evenodd" clip-rule="evenodd" d="M8 10C8 7.79086 9.79086 6 12 6C14.2091 6 16 7.79086 16 10V11H17C18.933 11 20.5 12.567 20.5 14.5C20.5 16.433 18.933 18 17 18H16.9C16.3477 18 15.9 18.4477 15.9 19C15.9 19.5523 16.3477 20 16.9 20H17C20.0376 20 22.5 17.5376 22.5 14.5C22.5 11.7793 20.5245 9.51997 17.9296 9.07824C17.4862 6.20213 15.0003 4 12 4C8.99974 4 6.51381 6.20213 6.07036 9.07824C3.47551 9.51997 1.5 11.7793 1.5 14.5C1.5 17.5376 3.96243 20 7 20H7.1C7.65228 20 8.1 19.5523 8.1 19C8.1 18.4477 7.65228 18 7.1 18H7C5.067 18 3.5 16.433 3.5 14.5C3.5 12.567 5.067 11 7 11H8V10ZM13 11C13 10.4477 12.5523 10 12 10C11.4477 10 11 10.4477 11 11V16.5858L9.70711 15.2929C9.31658 14.9024 8.68342 14.9024 8.29289 15.2929C7.90237 15.6834 7.90237 16.3166 8.29289 16.7071L11.2929 19.7071C11.6834 20.0976 12.3166 20.0976 12.7071 19.7071L15.7071 16.7071C16.0976 16.3166 16.0976 15.6834 15.7071 15.2929C15.3166 14.9024 14.6834 14.9024 14.2929 15.2929L13 16.5858V11Z" fill="currentColor"></path> </g></svg>
 				</button>
 			</div>
 			${
@@ -587,6 +618,7 @@ function renderFileMessage(fileData, isSender) {
 	`;
 }
 
+// 自动调整输入框高度
 export function autoGrowInput() {
   const input = $(".input-message-input");
   if (!input) return;
@@ -594,6 +626,7 @@ export function autoGrowInput() {
   input.style.height = input.scrollHeight + "px";
 }
 
+// 处理粘贴为纯文本
 function handlePasteAsPlainText(element) {
   if (!element) return;
   on(element, "paste", function (e) {
@@ -620,6 +653,7 @@ function handlePasteAsPlainText(element) {
   });
 }
 
+// 设置输入框占位符功能
 export function setupInputPlaceholder() {
   const input = $(".input-message-input");
   const placeholder = $(".input-field-placeholder");
