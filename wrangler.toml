@@ -18,3 +18,7 @@ bindings = [
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["ChatRoom"]
+
+[[r2_buckets]]
+binding = "IMAGE_BUCKET"
+bucket_name = "nodecrypt-storage"

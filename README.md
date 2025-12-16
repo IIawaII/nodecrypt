@@ -172,7 +172,7 @@ sequenceDiagram
 ---
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=IIawaII/NodeCrypt&type=Timeline)](https://www.star-history.com/#IIawaII/NodeCrypt&Timeline)
+[![Star History Chart](https://api.star-history.com/svg?repos=IIawaII/NodeCrypt&type=timeline&legend=top-left)](https://www.star-history.com/#IIawaII/NodeCrypt&type=timeline&legend=top-left)
 
 **NodeCrypt** - 真正的端到端加密通信 🔐
 
