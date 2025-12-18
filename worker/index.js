@@ -8,8 +8,25 @@ import {
   getTime,
 } from "./utils.js";
 
-// 登录页面 HTML
-function getLoginPage(errorMsg = "") {
+// === 新增：Turnstile 验证辅助函数 ===
+async function verifyTurnstile(token, secretKey, ip) {
+  const formData = new FormData();
+  formData.append("secret", secretKey);
+  formData.append("response", token);
+  formData.append("remoteip", ip);
+
+  const url = "https://challenges.cloudflare.com/turnstile/v0/siteverify";
+  const result = await fetch(url, {
+    body: formData,
+    method: "POST",
+  });
+
+  const outcome = await result.json();
+  return outcome.success;
+}
+
+// 修改：登录页面 HTML (接收 siteKey 参数)
+function getLoginPage(siteKey, errorMsg = "") {
   return `
   <!DOCTYPE html>
   <html lang="zh-CN">
@@ -17,6 +34,7 @@ function getLoginPage(errorMsg = "") {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>系统访问保护</title>
+    <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
     <style>
       :root { --primary: #2563eb; --bg: #f8fafc; --card: #ffffff; --text: #1e293b; }
       body {
@@ -47,8 +65,10 @@ function getLoginPage(errorMsg = "") {
         border: none; border-radius: 8px; font-weight: 600; font-size: 1rem;
         cursor: pointer; transition: background 0.2s; margin-top: 1rem;
       }
-      button:hover { background-color: #1d4ed8; }
+      button:disabled { background-color: #94a3b8; cursor: not-allowed; }
+      button:hover:not(:disabled) { background-color: #1d4ed8; }
       .error { color: #ef4444; font-size: 0.875rem; margin-bottom: 1rem; min-height: 1.25em; }
+      .cf-turnstile { margin-top: 1rem; display: flex; justify-content: center; }
     </style>
   </head>
   <body>
@@ -64,6 +84,7 @@ function getLoginPage(errorMsg = "") {
           <label>密码</label>
           <input type="password" id="password" required autocomplete="current-password">
         </div>
+        <div class="cf-turnstile" data-sitekey="${siteKey}" data-theme="light"></div>
         <button type="submit">进入系统</button>
       </form>
     </div>
@@ -72,24 +93,45 @@ function getLoginPage(errorMsg = "") {
         e.preventDefault();
         const u = document.getElementById('username').value;
         const p = document.getElementById('password').value;
+        const errorDiv = document.getElementById('error-msg');
         const btn = e.target.querySelector('button');
         
-        // 简单的输入检查
+        // 获取 Turnstile Token
+        const formData = new FormData(e.target);
+        const token = formData.get('cf-turnstile-response');
+
         if(!u || !p) return;
+        if(!token) {
+            errorDiv.innerText = "请完成人机验证";
+            return;
+        }
 
         btn.disabled = true;
         btn.innerText = "验证中...";
+        errorDiv.innerText = "";
 
-        // 构造 Basic Auth 字符串
-        const credentials = btoa(u + ":" + p);
-        
-        // 设置 Cookie，有效期 7 天
-        const d = new Date();
-        d.setTime(d.getTime() + (7*24*60*60*1000));
-        document.cookie = "auth_token=" + credentials + ";expires="+ d.toUTCString() + ";path=/;SameSite=Strict";
+        try {
+            // 发送请求到后端验证
+            const response = await fetch('/auth/login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username: u, password: p, token: token })
+            });
 
-        // 刷新页面，让服务器读取 Cookie
-        location.reload();
+            if (response.ok) {
+                location.reload(); // 验证成功，刷新页面进入系统
+            } else {
+                const data = await response.json();
+                errorDiv.innerText = data.error || "验证失败";
+                if (window.turnstile) turnstile.reset(); // 重置验证码
+                btn.disabled = false;
+                btn.innerText = "进入系统";
+            }
+        } catch (err) {
+            errorDiv.innerText = "网络错误，请重试";
+            btn.disabled = false;
+            btn.innerText = "进入系统";
+        }
       });
     </script>
   </body>
@@ -113,7 +155,6 @@ async function checkAuth(request, env) {
 
   // 尝试获取 Header 中的认证信息
   let auth = request.headers.get("Authorization");
-  let isFromCookie = false;
 
   // 如果 Header 没有，尝试从 Cookie 获取
   if (!auth) {
@@ -127,14 +168,13 @@ async function checkAuth(request, env) {
 
       if (cookies["auth_token"]) {
         auth = "Basic " + cookies["auth_token"];
-        isFromCookie = true;
       }
     }
   }
 
   // 如果完全没有凭证，返回 HTML 登录页
   if (!auth || !auth.startsWith("Basic ")) {
-    return new Response(getLoginPage(), {
+    return new Response(getLoginPage(env.TURNSTILE_SITE_KEY), {
       headers: { "Content-Type": "text/html; charset=utf-8" },
     });
   }
@@ -144,7 +184,7 @@ async function checkAuth(request, env) {
     const parts = decoded.split(":");
 
     if (parts.length < 2) {
-      return new Response(getLoginPage("无效的凭证格式"), {
+      return new Response(getLoginPage(env.TURNSTILE_SITE_KEY, "无效的凭证格式"), {
         headers: { "Content-Type": "text/html; charset=utf-8" },
       });
     }
@@ -171,7 +211,7 @@ async function checkAuth(request, env) {
 
     // 验证失败处理
     if (!isValid) {
-      return new Response(getLoginPage(errorMsg), {
+      return new Response(getLoginPage(env.TURNSTILE_SITE_KEY, errorMsg), {
         status: 401,
         headers: {
           "Content-Type": "text/html; charset=utf-8",
@@ -181,11 +221,11 @@ async function checkAuth(request, env) {
       });
     }
 
-    console.log(`Authentication successful for user: ${username}`);
-    return null; // 通过验证
+    // 验证通过
+    return null; 
   } catch (error) {
     console.error("Authentication error:", error);
-    return new Response(getLoginPage("服务器内部验证错误"), {
+    return new Response(getLoginPage(env.TURNSTILE_SITE_KEY, "服务器内部验证错误"), {
       status: 500,
       headers: { "Content-Type": "text/html; charset=utf-8" },
     });
@@ -194,12 +234,65 @@ async function checkAuth(request, env) {
 
 export default {
   async fetch(request, env, ctx) {
-    // === 插入用户名和密码保护：所有路径都必须验证 ===
+    const url = new URL(request.url);
+
+    // 处理登录 API
+    if (url.pathname === "/auth/login" && request.method === "POST") {
+        try {
+            const { username, password, token } = await request.json();
+            const clientIp = request.headers.get("CF-Connecting-IP");
+
+            // 验证 Turnstile
+            const isTokenValid = await verifyTurnstile(token, env.TURNSTILE_SECRET_KEY, clientIp);
+            if (!isTokenValid) {
+                return new Response(JSON.stringify({ error: "人机验证失败，请刷新重试" }), {
+                    status: 400,
+                    headers: { "Content-Type": "application/json" }
+                });
+            }
+
+            // 验证用户名和密码
+            const expectedUsername = env.AUTH_USERNAME;
+            const storedHash = env.AUTH_PASSWORD_HASH;
+            
+            // 简单的防时序攻击比较
+            let isUserValid = (username === expectedUsername);
+            let isPassValid = false;
+            
+            if (isUserValid) {
+                const passwordHash = await sha256Hex(password);
+                isPassValid = (passwordHash === storedHash);
+            }
+
+            if (!isUserValid || !isPassValid) {
+                return new Response(JSON.stringify({ error: "用户名或密码错误" }), {
+                    status: 401,
+                    headers: { "Content-Type": "application/json" }
+                });
+            }
+
+            // 3. 验证成功，生成 Cookie
+            const credentials = btoa(username + ":" + password);
+            const d = new Date();
+            d.setTime(d.getTime() + (7*24*60*60*1000)); // 7天过期
+            const cookieVal = `auth_token=${credentials}; expires=${d.toUTCString()}; path=/; SameSite=Strict; HttpOnly; Secure`;
+
+            return new Response(JSON.stringify({ ok: true }), {
+                status: 200,
+                headers: {
+                    "Content-Type": "application/json",
+                    "Set-Cookie": cookieVal
+                }
+            });
+
+        } catch (e) {
+            return new Response(JSON.stringify({ error: "请求处理失败" }), { status: 500 });
+        }
+    }
+
+    // 访问验证：拦截其他所有请求
     const authFail = await checkAuth(request, env);
     if (authFail) return authFail;
-    // ==========================================
-
-    const url = new URL(request.url);
 
     // 处理WebSocket请求
     const upgradeHeader = request.headers.get("Upgrade");
@@ -211,15 +304,11 @@ export default {
 
     // 处理API请求
     if (url.pathname.startsWith("/api/")) {
-      //================================================================================================================
-      // 1. 上传接口 (PUT)
-      // 客户端上传加密后的二进制数据
+      // 上传接口 (PUT)
       if (url.pathname === "/api/upload" && request.method === "PUT") {
         try {
           const fileId = crypto.randomUUID();
-          // 获取请求体（加密后的二进制流）
           const body = request.body;
-          // 存入 R2
           await env.IMAGE_BUCKET.put(fileId, body);
           
           return new Response(JSON.stringify({ ok: true, fileId: fileId }), {
@@ -230,7 +319,7 @@ export default {
         }
       }
 
-      // 2. 下载接口 (GET)
+      // 下载接口 (GET)
       // 获取加密的文件数据
       if (url.pathname.startsWith("/api/image/")) {
         const fileId = url.pathname.replace("/api/image/", "");
@@ -249,7 +338,7 @@ export default {
         return new Response(object.body, { headers });
       }
       //================================================================================================================
-      // ...API 逻辑...
+      // ...API 逻辑...      
       return new Response(JSON.stringify({ ok: true }), {
         headers: { "Content-Type": "application/json" },
       });
