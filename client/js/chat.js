@@ -15,15 +15,13 @@ import {
 } from "./util.dom.js";
 import { formatFileSize } from "./util.file.js";
 import { t } from "./util.i18n.js";
-// === 引入解密工具 ===
 import { importKey, decryptBlob } from "./util.storage.js";
 
-// === 辅助函数：加载并解密 R2 图片 ===
-// 增加 mimeType 参数，确保 Blob 类型正确
+// 辅助函数：加载并解密 R2 资源
 async function loadEncryptedImage(fileId, keyJwk, imgElement, mimeType = "image/jpeg") {
   try {
     const res = await fetch(`/api/image/${fileId}`);
-    if (!res.ok) throw new Error("Image load failed");
+    if (!res.ok) throw new Error("Resource load failed");
     const encryptedBlob = await res.blob();
 
     const key = await importKey(keyJwk);
@@ -31,20 +29,19 @@ async function loadEncryptedImage(fileId, keyJwk, imgElement, mimeType = "image/
     // 传入 mimeType 给解密函数
     const decryptedBlob = await decryptBlob(encryptedBlob, key, mimeType);
 
-    const url = URL.createObjectURL(decryptedBlob);
-    
-    // 如果是 img 标签，更新 src
+    // 如果传入了 img 元素，则自动创建 URL 并赋值
     if (imgElement && imgElement.tagName === "IMG") {
+      const url = URL.createObjectURL(decryptedBlob);
       imgElement.src = url;
       imgElement.classList.remove("loading");
     }
     
-    // 返回 blob 供后续使用（如下载）
+    // 返回 blob 供后续使用
     return decryptedBlob;
   } catch (error) {
-    console.error("Failed to load encrypted image:", error);
+    console.error("Failed to load encrypted resource:", error);
     if (imgElement) {
-      imgElement.alt = "Image Load Failed";
+      imgElement.alt = "Load Failed";
       imgElement.classList.add("load-error");
     }
     throw error;
@@ -104,14 +101,13 @@ export function addMsg(
   
   let contentHtml = "";
 
-  // === 处理新版 R2 加密图片消息 ===
+  // 处理 R2 加密图片消息
   if (msgType === "image_r2" || msgType === "image_r2_private") {
     const data = text; // { originalId, thumbId, key, mime, fileName, text... }
     const messageText = data.text ? `<div class="message-text">${textToHTML(data.text)}</div>` : "";
     
-    // 生成唯一 ID 用于异步查找元素
-    const imgId = `r2-img-${Math.random().toString(36).substr(2, 9)}`;
-    const thumbMime = "image/jpeg"; // 缩略图固定为 jpeg
+    const imgId = `r2-img-${Math.random().toString(36).slice(2, 11)}`;
+    const thumbMime = "image/jpeg"; 
 
     contentHtml = `
       <div class="r2-image-container">
@@ -123,18 +119,15 @@ export function addMsg(
       </div>
     `;
 
-    // 异步加载图片
     setTimeout(() => {
       const imgEl = document.getElementById(imgId);
       if (imgEl) {
-        // 1. 加载并解密缩略图
         loadEncryptedImage(data.thumbId, data.key, imgEl, thumbMime).then(() => {
              imgEl.style.opacity = "1";
              const loader = imgEl.parentNode.querySelector('.img-loader');
              if(loader) loader.remove();
         });
 
-        // 2. 绑定点击事件：查看原图 (传入 mime 和 fileName)
         imgEl.style.cursor = "pointer";
         imgEl.onclick = () => {
           showR2ImageModal(data.originalId, data.key, data.mime, data.fileName);
@@ -143,7 +136,47 @@ export function addMsg(
     }, 0);
 
   } 
-  // === 处理旧版 Base64 图片消息 (保持兼容) ===
+  // 处理 R2 加密视频消息
+  else if (msgType === "video_r2" || msgType === "video_r2_private") {
+    const data = text; 
+    const messageText = data.text ? `<div class="message-text">${textToHTML(data.text)}</div>` : "";
+    const imgId = `r2-vid-${Math.random().toString(36).slice(2, 11)}`;
+    
+    contentHtml = `
+      <div class="r2-image-container video-container">
+        ${messageText}
+        <div class="bubble-img-wrapper" style="min-height: 100px; min-width: 100px; position: relative; cursor: pointer;">
+           <img id="${imgId}" class="bubble-img loading" alt="Video Thumbnail" style="opacity: 0.5; transition: opacity 0.3s;" />
+           
+           <div class="play-icon-overlay" style="position:absolute; top:50%; left:50%; transform:translate(-50%, -50%); width: 40px; height: 40px; background: rgba(0,0,0,0.6); border-radius: 50%; display: flex; align-items: center; justify-content: center; pointer-events:none;">
+             <svg width="20" height="20" viewBox="0 0 24 24" fill="white" xmlns="http://www.w3.org/2000/svg">
+                <path d="M8 5V19L19 12L8 5Z" />
+             </svg>
+           </div>
+
+           <div class="img-loader"></div>
+        </div>
+      </div>
+    `;
+
+    setTimeout(() => {
+      const imgEl = document.getElementById(imgId);
+      if (imgEl) {
+        // 加载缩略图
+        loadEncryptedImage(data.thumbId, data.key, imgEl, "image/jpeg").then(() => {
+             imgEl.style.opacity = "1";
+             const loader = imgEl.parentNode.querySelector('.img-loader');
+             if(loader) loader.remove();
+        });
+
+        // 绑定点击事件：打开视频播放器
+        imgEl.parentNode.onclick = () => {
+          showR2VideoModal(data.originalId, data.key, data.mime || "video/mp4", data.fileName);
+        };
+      }
+    }, 0);
+  }
+  // 处理 Base64 图片消息
   else if (msgType === "image" || msgType === "image_private") {
     if (typeof text === "object" && text.images && Array.isArray(text.images)) {
       const messageText = text.text ? textToHTML(text.text) : "";
@@ -225,12 +258,12 @@ export function addOtherMsg(
   
   let contentHtml = "";
 
-  // === 处理新版 R2 加密图片消息 (他人) ===
+  // 处理 R2 加密图片消息 (他人)
   if (msgType === "image_r2" || msgType === "image_r2_private") {
     const data = msg;
     const messageText = data.text ? `<div class="message-text">${textToHTML(data.text)}</div>` : "";
     
-    const imgId = `r2-img-other-${Math.random().toString(36).substr(2, 9)}`;
+    const imgId = `r2-img-other-${Math.random().toString(36).slice(2, 11)}`;
     const thumbMime = "image/jpeg";
     
     contentHtml = `
@@ -259,7 +292,45 @@ export function addOtherMsg(
       }
     }, 0);
   }
-  // === 处理旧版 Base64 图片 (兼容) ===
+  // 处理 R2 加密视频消息 (他人)
+  else if (msgType === "video_r2" || msgType === "video_r2_private") {
+    const data = msg;
+    const messageText = data.text ? `<div class="message-text">${textToHTML(data.text)}</div>` : "";
+    const imgId = `r2-vid-other-${Math.random().toString(36).slice(2, 11)}`;
+    
+    contentHtml = `
+      <div class="r2-image-container video-container">
+        ${messageText}
+        <div class="bubble-img-wrapper" style="min-height: 100px; min-width: 100px; position: relative; cursor: pointer;">
+           <img id="${imgId}" class="bubble-img loading" alt="Video Thumbnail" style="opacity: 0.5; transition: opacity 0.3s;" />
+           
+           <div class="play-icon-overlay" style="position:absolute; top:50%; left:50%; transform:translate(-50%, -50%); width: 40px; height: 40px; background: rgba(0,0,0,0.6); border-radius: 50%; display: flex; align-items: center; justify-content: center; pointer-events:none;">
+             <svg width="20" height="20" viewBox="0 0 24 24" fill="white" xmlns="http://www.w3.org/2000/svg">
+                <path d="M8 5V19L19 12L8 5Z" />
+             </svg>
+           </div>
+           
+           <div class="img-loader"></div>
+        </div>
+      </div>
+    `;
+
+    setTimeout(() => {
+      const imgEl = document.getElementById(imgId);
+      if (imgEl) {
+        loadEncryptedImage(data.thumbId, data.key, imgEl, "image/jpeg").then(() => {
+             imgEl.style.opacity = "1";
+             const loader = imgEl.parentNode.querySelector('.img-loader');
+             if(loader) loader.remove();
+        });
+        
+        imgEl.parentNode.onclick = () => {
+          showR2VideoModal(data.originalId, data.key, data.mime || "video/mp4", data.fileName);
+        };
+      }
+    }, 0);
+  }
+  // 处理 Base64 图片
   else if (msgType === "image" || msgType === "image_private") {
     if (typeof msg === "object" && msg.images && Array.isArray(msg.images)) {
       const messageText = msg.text ? textToHTML(msg.text) : "";
@@ -288,11 +359,11 @@ export function addOtherMsg(
       contentHtml = `<img src="${safeImgSrc}" alt="image" class="bubble-img">`;
     }
   } 
-  // === 处理文件消息 ===
+  // 处理文件消息
   else if (msgType === "file" || msgType === "file_private") {
     contentHtml = renderFileMessage(msg, false);
   } 
-  // === 普通文本 ===
+  // 处理普通文本
   else {
     contentHtml = textToHTML(msg);
   }
@@ -380,17 +451,16 @@ export function setupImagePreview() {
   on($id("chat-area"), "click", function (e) {
     const target = e.target;
     if (target.tagName === "IMG" && target.closest(".bubble-content")) {
-      // 排除 R2 图片（它们有自己的 onclick 处理）
-      if (!target.id || !target.id.startsWith('r2-img')) {
+      // 排除 R2 图片和视频
+      if (!target.id || (!target.id.startsWith('r2-img') && !target.id.startsWith('r2-vid'))) {
           showImageModal(target.src);
       }
     }
   });
 }
 
-// === 新增：显示 R2 加密原图的模态框 ===
+// 显示 R2 加密原图的模态框
 export function showR2ImageModal(fileId, keyJwk, mimeType = "image/jpeg", fileName = "image.jpg") {
-  // 创建模态框，包含一个明确的下载按钮
   const modal = createElement(
     "div",
     { class: "img-modal-bg" },
@@ -398,9 +468,6 @@ export function showR2ImageModal(fileId, keyJwk, mimeType = "image/jpeg", fileNa
      <div class="img-modal-content img-modal-content-overflow">
         <div class="modal-loading-indicator" style="color:white; font-size: 20px;">Loading Original...</div>
         <img class="img-modal-img" style="display:none;" />
-        <div class="modal-tools" style="position: absolute; bottom: 20px; right: 20px; z-index: 100;">
-           <button class="download-btn" style="padding: 8px 16px; background: rgba(0,0,0,0.6); border: 1px solid white; color: white; border-radius: 4px; cursor: pointer; display:none;">Download Original</button>
-        </div>
         <span class="img-modal-close">&times;</span>
      </div>`
   );
@@ -408,7 +475,6 @@ export function showR2ImageModal(fileId, keyJwk, mimeType = "image/jpeg", fileNa
   
   const img = $("img", modal);
   const loading = $(".modal-loading-indicator", modal);
-  const downloadBtn = $(".download-btn", modal);
   
   const cleanup = () => { 
       if (img.src && img.src.startsWith('blob:')) {
@@ -421,33 +487,67 @@ export function showR2ImageModal(fileId, keyJwk, mimeType = "image/jpeg", fileNa
     if (e.target === modal || e.target.classList.contains("img-modal-blur")) cleanup();
   });
 
-  // 1. 加载原图 (传入 mimeType)
+  // 加载原图
   loadEncryptedImage(fileId, keyJwk, img, mimeType).then((decryptedBlob) => {
      if (loading) loading.style.display = 'none';
      img.style.display = 'block';
-     
-     // 2. 启用下载按钮
-     if (downloadBtn) {
-         downloadBtn.style.display = "block";
-         downloadBtn.onclick = (e) => {
-             e.stopPropagation(); // 防止触发模态框关闭
-             const downloadUrl = URL.createObjectURL(decryptedBlob);
-             const a = document.createElement("a");
-             a.href = downloadUrl;
-             // 强制指定文件名和后缀
-             a.download = fileName || `image_${Date.now()}.${mimeType.split('/')[1]}`;
-             document.body.appendChild(a);
-             a.click();
-             document.body.removeChild(a);
-             URL.revokeObjectURL(downloadUrl);
-         };
-     }
   });
 
   setupImageZoom(img, modal);
 }
 
-// 显示图片模态框 (旧版)
+// 显示 R2 加密视频的模态框
+export function showR2VideoModal(fileId, keyJwk, mimeType = "video/mp4", fileName = "video.mp4") {
+  const modal = createElement(
+    "div",
+    { class: "img-modal-bg" },
+    `<div class="img-modal-blur"></div>
+     <div class="img-modal-content" style="width: 100%; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; background: transparent;">
+        
+        <div class="modal-loading-indicator" style="color:white; font-size: 18px; margin-bottom: 20px;">
+           Downloading & Decrypting Video... <br>
+           <span style="font-size:12px; opacity:0.7;">(This may take a moment)</span>
+        </div>
+
+        <video controls playsinline class="img-modal-vid" style="display:none; max-width: 90%; max-height: 80vh; box-shadow: 0 4px 20px rgba(0,0,0,0.5); border-radius: 8px; background: black;"></video>
+        
+        <span class="img-modal-close" style="position: absolute; top: 20px; right: 20px; font-size: 40px; color: white; cursor: pointer;">&times;</span>
+     </div>`
+  );
+  document.body.appendChild(modal);
+
+  const videoEl = modal.querySelector("video");
+  const loading = modal.querySelector(".modal-loading-indicator");
+  const closeBtn = modal.querySelector(".img-modal-close");
+  let objectUrl = null;
+
+  const cleanup = () => {
+     if (objectUrl) URL.revokeObjectURL(objectUrl);
+     modal.remove();
+  };
+
+  on(closeBtn, "click", cleanup);
+  on(modal, "click", (e) => {
+     if (e.target === modal || e.target.classList.contains("img-modal-blur")) cleanup();
+  });
+
+  // 复用 loadEncryptedImage 来获取 Blob，不传 img 元素
+  loadEncryptedImage(fileId, keyJwk, null, mimeType)
+    .then(decryptedBlob => {
+        objectUrl = URL.createObjectURL(decryptedBlob);
+        videoEl.src = objectUrl;
+        
+        loading.style.display = 'none';
+        videoEl.style.display = 'block';
+        videoEl.play().catch(e => console.log("Auto-play prevented", e)); 
+    })
+    .catch(err => {
+        loading.innerHTML = `<span style="color: #ff6b6b;">Error: ${err.message}</span>`;
+        console.error(err);
+    });
+}
+
+// 显示图片模态框
 export function showImageModal(src) {
   const modal = createElement(
     "div",
@@ -584,7 +684,7 @@ function renderFileMessage(fileData, isSender) {
     // 发送方历史消息，不显示状态和下载按钮
     downloadBtnStyle = "display: none;";
   } else {
-    // 接收方历史消息，直接显示下载按钮（带动画效果）
+    // 接收方历史消息，直接显示下载按钮
     downloadBtnStyle = "display: flex;";
   }
   // Different icon for archives vs single files

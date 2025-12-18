@@ -4,6 +4,9 @@
 // 引入音频文件
 import notificationSoundUrl from "../sounds/notification.mp3";
 
+// 导入国际化工具函数
+import { t } from "./util.i18n.js";
+
 // 读取设置
 function getSettings() {
   try {
@@ -111,16 +114,25 @@ function sendDesktopNotification(roomName, sender, content, type) {
     return;
 
   let bodyText = content;
-  if (type && type.includes("image")) bodyText = "[图片]";
-  else if (type && type.includes("file"))
-    bodyText = `[文件] ${content.fileName || ""}`;
+  
+  // 处理不同消息类型的显示文本
+  if (type && type.includes("image")) {
+    bodyText = t("notification.image", "[Image]");
+  } else if (type && type.includes("video")) {
+    bodyText = t("notification.video", "[Video]");
+  } else if (type && type.includes("file")) {
+    bodyText = `${t("notification.file", "[File]")} ${content.fileName || ""}`;
+  }
 
+  // 截断过长的文本
   if (typeof bodyText === "string" && bodyText.length > 50) {
     bodyText = bodyText.substring(0, 50) + "...";
   }
 
   try {
-    const notification = new Notification(`来自 ${sender} (#${roomName})`, {
+    const title = `${t("notification.from", "From")} ${sender} (#${roomName})`;
+    
+    const notification = new Notification(title, {
       body: bodyText,
       icon: "/favicon.ico",
       silent: true,
@@ -147,12 +159,12 @@ export function handleNewMessage(roomName, msgType, content, sender) {
   // 忽略自己和系统消息
   if (!sender || sender === myUserName || msgType === "system") return;
 
-  // 1. 优先播放声音
+  // 播放提示声音
   if (settings.sound) {
     playSound();
   }
 
-  // 2. 处理桌面通知
+  // 处理桌面通知
   if (settings.notify) {
     startTitleBlink(sender);
     sendDesktopNotification(roomName, sender, content, msgType);

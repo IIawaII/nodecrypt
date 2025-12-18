@@ -34,6 +34,7 @@ export default {
     "ui.me": "（我）",
     "ui.anonymous": "匿名用户",
     "ui.start_private_chat": "选择用户开始私信",
+    "ui.upload_failed": "上传失败",
 
     // Settings panel
     "settings.title": "设置",
@@ -69,6 +70,9 @@ export default {
     "notification.not_supported": "您的浏览器不支持通知功能。",
     "notification.allow_browser": "请在浏览器设置中允许通知。",
     "notification.image": "[图片]",
+    "notification.video": "[视频]",
+    "notification.file": "[文件]",
+    "notification.from": "来自",
     "notification.private": "（私信）",
 
     // Actions and menu

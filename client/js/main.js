@@ -10,6 +10,9 @@ import { setupFileSend, handleFileMessage, downloadFile } from "./util.file.js";
 // Import image processing functions from util.image.js
 import { setupImagePaste } from "./util.image.js";
 
+// 从 util.video.js 中导入视频处理功能 (新增)
+import { processAndUploadVideo } from "./util.video.js";
+
 // 从 util.emoji.js 中导入设置表情选择器的函数
 // Import setupEmojiPicker function from util.emoji.js
 import { setupEmojiPicker } from "./util.emoji.js";
@@ -277,6 +280,63 @@ window.addEventListener("DOMContentLoaded", () => {
     }
   }
 
+  // 视频上传处理
+  const fileInput = document.querySelector('.new-message-wrapper input[type="file"]');
+  if (fileInput) {
+    // 使用 capture: true 确保最先捕获事件
+    fileInput.addEventListener("change", async (e) => {
+       const file = e.target.files[0];
+       // 检测是否为视频文件
+       if (file && file.type.startsWith("video/")) {
+           // 阻止默认行为，防止被当做普通文件处理
+           e.stopImmediatePropagation();
+           e.stopPropagation();
+
+           const rd = roomsData[activeRoomIndex];
+           if (!rd || !rd.chat) return;
+
+           try {
+              // 执行加密和上传
+              const videoMeta = await processAndUploadVideo(file);
+              const userName = rd.myUserName || "";
+              const msgToSend = { ...videoMeta, userName, text: "" };
+
+              // 发送视频消息
+              if (rd.privateChatTargetId) {
+                  sendEncrypted(rd, "video_r2_private", msgToSend, rd.privateChatTargetId);
+              } else {
+                  rd.chat.sendChannelMessage("video_r2", msgToSend);
+                  // 立即在本地显示视频气泡
+                  addMsg(msgToSend, false, "video_r2");
+              }
+
+           } catch (error) {
+              console.error("Video processing failed", error);
+              // 若失败提示错误信息
+              addSystemMsg(t("ui.upload_failed", "Upload failed"));
+           } finally {
+              // 清空 input，防止无法连续选择同一个文件
+              fileInput.value = "";
+           }
+       }
+    }, true); 
+  }
+
+  // 辅助函数：发送加密私聊
+  function sendEncrypted(rd, type, data, targetId) {
+    const targetClient = rd.chat.channel[targetId];
+    if (targetClient && targetClient.shared) {
+        const payload = { a: "m", t: type, d: data };
+        const encrypted = rd.chat.encryptClientMessage(payload, targetClient.shared);
+        const serverMsg = rd.chat.encryptServerMessage(
+            { a: "c", p: encrypted, c: targetId }, 
+            rd.chat.serverShared
+        );
+        rd.chat.sendMessage(serverMsg);
+        addMsg(data, false, type);
+    }
+  }
+
   // 为发送按钮添加点击事件
   // Add click event for send button
   const sendButton = document.querySelector(".send-message-btn");
@@ -284,46 +344,40 @@ window.addEventListener("DOMContentLoaded", () => {
     sendButton.addEventListener("click", sendMessage);
   }
 
-  // 设置发送文件功能
+// 设置发送文件功能
   // Setup file sending functionality
-setupFileSend({
+  setupFileSend({
     inputSelector: ".input-message-input",
     attachBtnSelector: ".chat-attach-btn",
     fileInputSelector: '.new-message-wrapper input[type="file"]',
     
-    // === 修改回调逻辑：支持 R2 图片和普通文件 ===
     onSend: (message) => {
       const rd = roomsData[activeRoomIndex];
       if (rd && rd.chat) {
         const userName = rd.myUserName || "";
-        // 确保消息包含 userName (util.file.js 现在会传过来，但为了保险再覆盖一次)
         const msgWithUser = { ...message, userName };
 
-        // === 分支 A: 处理 R2 图片消息 ===
+        // 处理 R2 图片消息
         if (msgWithUser.type === 'image_r2') {
-             // 构造与 sendMessage 相同的 R2 消息结构
-             const messageContent = { ...msgWithUser, text: "" }; // 附件发送通常没有配文
-
+             const messageContent = { ...msgWithUser, text: "" }; 
              if (rd.privateChatTargetId) {
-                // 私聊图片
-                const targetClient = rd.chat.channel[rd.privateChatTargetId];
-                if (targetClient && targetClient.shared) {
-                    const payload = { a: "m", t: "image_r2_private", d: messageContent };
-                    const encrypted = rd.chat.encryptClientMessage(payload, targetClient.shared);
-                    const serverMsg = rd.chat.encryptServerMessage(
-                        { a: "c", p: encrypted, c: rd.privateChatTargetId }, 
-                        rd.chat.serverShared
-                    );
-                    rd.chat.sendMessage(serverMsg);
-                    addMsg(messageContent, false, "image_r2_private");
-                }
+                sendEncrypted(rd, 'image_r2_private', messageContent, rd.privateChatTargetId);
              } else {
-                // 群聊图片
                 rd.chat.sendChannelMessage("image_r2", messageContent);
                 addMsg(messageContent, false, "image_r2");
              }
         } 
-        // === 分支 B: 处理普通文件消息 (旧逻辑) ===
+        // 处理 R2 视频消息
+        else if (msgWithUser.type === 'video_r2') {
+             const messageContent = { ...msgWithUser, text: "" }; 
+             if (rd.privateChatTargetId) {
+                sendEncrypted(rd, 'video_r2_private', messageContent, rd.privateChatTargetId);
+             } else {
+                rd.chat.sendChannelMessage("video_r2", messageContent);
+                addMsg(messageContent, false, "video_r2");
+             }
+        }
+        // 处理普通文件消息
         else {
             if (rd.privateChatTargetId) {
               // 私聊文件
@@ -349,7 +403,6 @@ setupFileSend({
                 );
                 rd.chat.sendMessage(encryptedMessageForServer);
 
-                // 仅在文件开始传输时显示气泡
                 if (msgWithUser.type === "file_start") {
                   addMsg(msgWithUser, false, "file_private");
                 }

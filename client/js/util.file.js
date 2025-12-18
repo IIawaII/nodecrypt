@@ -3,6 +3,8 @@
 import { deflate, inflate } from "fflate";
 import { showFileUploadModal } from "./util.fileUpload.js";
 import { processAndUploadImage } from "./util.image.js";
+// === 新增：导入视频处理模块 ===
+import { processAndUploadVideo } from "./util.video.js";
 
 // 分卷大小统一配置
 const DEFAULT_VOLUME_SIZE = 256 * 1024; // 512KB
@@ -393,11 +395,12 @@ export function setupFileSend({
             ? window.roomsData[window.activeRoomIndex]?.myUserName || ""
             : "";
 
-        // === 1. 分离图片和其他文件 ===
+        // 分离图片、视频和其他文件
         const imageFiles = files.filter(f => f.type.startsWith('image/'));
-        const otherFiles = files.filter(f => !f.type.startsWith('image/'));
+        const videoFiles = files.filter(f => f.type.startsWith('video/'));
+        const otherFiles = files.filter(f => !f.type.startsWith('image/') && !f.type.startsWith('video/'));
 
-        // === 2. 处理图片 (走 R2 通道) ===
+        // 处理图片
         for (const imgFile of imageFiles) {
           try {
             // 使用 util.image.js 的逻辑处理
@@ -412,7 +415,21 @@ export function setupFileSend({
           }
         }
 
-        // === 3. 处理其他文件 (走 WebSocket 分卷通道) ===
+        // 处理视频
+        for (const vidFile of videoFiles) {
+          try {
+             // 使用 util.video.js 的逻辑处理
+             const metaData = await processAndUploadVideo(vidFile);
+             onSend({ ...metaData, userName });
+          } catch (error) {
+            console.error("Video upload failed via attachment:", error);
+            if (window.addSystemMsg) {
+              window.addSystemMsg(`Video upload failed: ${vidFile.name}`);
+            }
+          }
+        }
+
+        // 处理其他文件
         if (otherFiles.length > 0) {
            await handleFilesUpload(otherFiles, (msg) => {
             onSend({ ...msg, userName });

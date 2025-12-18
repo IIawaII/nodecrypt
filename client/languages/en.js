@@ -34,6 +34,7 @@ export default {
     "ui.me": " (me)",
     "ui.anonymous": "Anonymous",
     "ui.start_private_chat": "Select for private chat",
+    "ui.upload_failed": "Upload Failed",
 
     // Settings panel
     "settings.title": "Settings",
@@ -71,6 +72,9 @@ export default {
     "notification.allow_browser":
       "Please allow notifications in your browser settings.",
     "notification.image": "[image]",
+    "notification.video": "[video]",
+    "notification.file": "[file]",
+    "notification.from": "From",
     "notification.private": "(Private)",
 
     // Actions and menu
